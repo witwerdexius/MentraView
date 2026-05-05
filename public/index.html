@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web Reader – G1</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 16px;
+      padding: 32px 24px;
+      width: 100%;
+      max-width: 420px;
+    }
+
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .subtitle {
+      font-size: 0.8rem;
+      color: #666;
+      margin-bottom: 28px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    input[type="url"] {
+      width: 100%;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: #f0f0f0;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="url"]:focus {
+      border-color: #555;
+    }
+
+    button {
+      margin-top: 16px;
+      width: 100%;
+      background: #f0f0f0;
+      color: #111;
+      border: none;
+      border-radius: 10px;
+      padding: 13px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-top: 20px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      display: none;
+    }
+
+    .status.success { background: #0d2b1a; color: #4ade80; border: 1px solid #166534; }
+    .status.error   { background: #2b0d0d; color: #f87171; border: 1px solid #7f1d1d; }
+    .status.loading { background: #1a1a2b; color: #93c5fd; border: 1px solid #1e3a8a; }
+    .status.show    { display: block; }
+
+    .hint {
+      margin-top: 24px;
+      font-size: 0.75rem;
+      color: #444;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .glass-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 24px;
+      font-size: 0.8rem;
+      color: #555;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+
+    .dot.connected { background: #4ade80; box-shadow: 0 0 6px #4ade8088; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📖 Web Reader</h1>
+    <p class="subtitle">Artikel auf der G1 lesen</p>
+
+    <div class="glass-status">
+      <div class="dot" id="dot"></div>
+      <span id="glassLabel">Brille wird gesucht…</span>
+    </div>
+
+    <label for="urlInput">Website-Adresse</label>
+    <input
+      type="url"
+      id="urlInput"
+      placeholder="https://beispiel.de/artikel"
+      autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
+    />
+    <button id="loadBtn" disabled>Auf Brille laden</button>
+
+    <div class="status" id="statusBox"></div>
+
+    <p class="hint">
+      Kurz tippen → nächste Seite<br>
+      Lang drücken → vorherige Seite
+    </p>
+  </div>
+
+  <script>
+    // userId kommt als URL-Parameter von MentraOS: ?userId=abc123
+    const params = new URLSearchParams(location.search);
+    const userId = params.get("userId") || "";
+
+    const urlInput = document.getElementById("urlInput");
+    const loadBtn  = document.getElementById("loadBtn");
+    const statusBox = document.getElementById("statusBox");
+    const dot       = document.getElementById("dot");
+    const glassLabel = document.getElementById("glassLabel");
+
+    function setStatus(text, type) {
+      statusBox.textContent = text;
+      statusBox.className = `status ${type} show`;
+    }
+
+    function clearStatus() {
+      statusBox.className = "status";
+    }
+
+    // ── Brille-Verbindungsstatus pollen ──────────────────────────────
+    async function checkGlassStatus() {
+      if (!userId) {
+        glassLabel.textContent = "Kein Nutzer erkannt (userId fehlt in URL)";
+        return;
+      }
+      try {
+        const res = await fetch(`/status?userId=${encodeURIComponent(userId)}`);
+        const data = await res.json();
+        if (data.connected) {
+          dot.classList.add("connected");
+          glassLabel.textContent = "G1 verbunden";
+          loadBtn.disabled = false;
+        } else {
+          dot.classList.remove("connected");
+          glassLabel.textContent = "Brille nicht verbunden";
+          loadBtn.disabled = true;
+        }
+      } catch {
+        glassLabel.textContent = "Server nicht erreichbar";
+      }
+    }
+
+    checkGlassStatus();
+    setInterval(checkGlassStatus, 4000);
+
+    // ── Artikel laden ────────────────────────────────────────────────
+    loadBtn.addEventListener("click", async () => {
+      const url = urlInput.value.trim();
+      if (!url) {
+        setStatus("Bitte eine URL eingeben.", "error");
+        return;
+      }
+
+      loadBtn.disabled = true;
+      setStatus("⏳ Artikel wird geladen…", "loading");
+
+      try {
+        const res = await fetch("/load", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, url }),
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          setStatus(
+            `✅ „${data.title}" geladen\n${data.pages} Seiten auf der Brille`,
+            "success"
+          );
+        } else {
+          setStatus(`❌ ${data.error}`, "error");
+        }
+      } catch (err) {
+        setStatus("❌ Verbindung zum Server fehlgeschlagen.", "error");
+      } finally {
+        loadBtn.disabled = false;
+      }
+    });
+
+    // Enter-Taste im URL-Feld
+    urlInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") loadBtn.click();
+    });
+  </script>
+</body>
+</html>
