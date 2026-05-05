@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: mentraview
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: bun install
+    startCommand: bun start
+    envVars:
+      - key: MENTRA_API_KEY
+        sync: false
+      - key: PACKAGE_NAME
+        value: mentra.view
