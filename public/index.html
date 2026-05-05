@@ -85,6 +85,16 @@
       cursor: not-allowed;
     }
 
+    .btn-list {
+      background: #0d2b1a;
+      color: #4ade80;
+      border: 1px solid #166534;
+    }
+
+    .btn-list:hover:not(:disabled) {
+      background: #14432a;
+    }
+
     .status {
       margin-top: 20px;
       padding: 12px 14px;
@@ -194,6 +204,7 @@
       spellcheck="false"
     />
     <button id="loadBtn" disabled>Auf Brille laden</button>
+    <button id="listBtn" class="btn-list" disabled>🛒 Einkaufsliste anzeigen</button>
 
     <div class="status" id="statusBox"></div>
 
@@ -211,6 +222,7 @@
     const refreshBtn    = document.getElementById("refreshBtn");
     const urlInput      = document.getElementById("urlInput");
     const loadBtn       = document.getElementById("loadBtn");
+    const listBtn       = document.getElementById("listBtn");
     const statusBox     = document.getElementById("statusBox");
     const dot           = document.getElementById("dot");
     const glassLabel    = document.getElementById("glassLabel");
@@ -290,10 +302,12 @@
           dot.classList.add("connected");
           glassLabel.textContent = "G1 verbunden";
           loadBtn.disabled = false;
+          listBtn.disabled = false;
         } else {
           dot.classList.remove("connected");
           glassLabel.textContent = "Brille nicht verbunden";
           loadBtn.disabled = true;
+          listBtn.disabled = true;
         }
       } catch {
         glassLabel.textContent = "Server nicht erreichbar";
@@ -339,6 +353,29 @@
 
     urlInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") loadBtn.click();
+    });
+
+    // ── Einkaufsliste auf Brille anzeigen ────────────────────────────
+    listBtn.addEventListener("click", async () => {
+      listBtn.disabled = true;
+      setStatus("⏳ Liste wird geladen…", "loading");
+
+      try {
+        const res  = await fetch(`/showlist?userId=${encodeURIComponent(userId)}`, {
+          method: "POST",
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          setStatus(`✅ ${data.count} Artikel auf der Brille`, "success");
+        } else {
+          setStatus(`❌ ${data.error}`, "error");
+        }
+      } catch {
+        setStatus("❌ Verbindung zum Server fehlgeschlagen.", "error");
+      } finally {
+        listBtn.disabled = false;
+      }
     });
 
     // ── Even Realities Hub Bridge (läuft auf G1/G2-Brille) ──────────

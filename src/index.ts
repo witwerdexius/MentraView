@@ -86,26 +86,27 @@ async function fetchBringItems(): Promise<{ name: string; specification: string 
   }
 }
 
+const COL_WIDTH = 14;
+
+function itemLabel(item: { name: string; specification: string }): string {
+  const s = item.specification ? `${item.name} (${item.specification})` : item.name;
+  return s.length > COL_WIDTH ? s.slice(0, COL_WIDTH - 1) + "…" : s;
+}
+
 function formatBringList(items: { name: string; specification: string }[]): string {
-  if (items.length === 0) {
-    return "🛒 Einkaufsliste\n\n✓ Alles erledigt!";
-  }
-  const header = `🛒 Einkaufsliste (${items.length})\n\n`;
-  let display = header;
-  let shown = 0;
+  if (items.length === 0) return "✓ Alles erledigt!";
 
-  for (const item of items) {
-    const spec = item.specification ? ` (${item.specification})` : "";
-    const line = `• ${item.name}${spec}\n`;
-    if ((display + line).length > CHARS_PER_PAGE - 20) {
-      display += `…+${items.length - shown} weitere`;
-      break;
-    }
-    display += line;
-    shown++;
-  }
+  const visible = items.slice(0, 10);
+  const col1 = visible.slice(0, 5);
+  const col2 = visible.slice(5, 10);
 
-  return display.trim();
+  return col1
+    .map((item, i) => {
+      const left = itemLabel(item).padEnd(COL_WIDTH);
+      const right = col2[i] ? itemLabel(col2[i]) : "";
+      return right ? `${left}  ${right}` : left.trimEnd();
+    })
+    .join("\n");
 }
 
 // ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
@@ -325,6 +326,29 @@ mentraApp.post("/navigate", async (c) => {
   }
 
   return c.json({ ok: true, page: state.currentPage + 1, total: state.pages.length });
+});
+
+/**
+ * POST /showlist?userId=...
+ * Zeigt die Bring!-Einkaufsliste sofort auf der Brille an.
+ */
+mentraApp.post("/showlist", async (c) => {
+  const userId = c.req.query("userId");
+  if (!userId) return c.json({ error: "userId fehlt" }, 400);
+
+  const state = activeSessions.get(userId);
+  if (!state) return c.json({ error: "Keine aktive Session" }, 404);
+
+  if (!bringClient || !bringListUuid) {
+    return c.json({ error: "Bring! nicht konfiguriert" }, 503);
+  }
+
+  const items = await fetchBringItems();
+  state.lastListSnapshot = JSON.stringify(items);
+  state.displayMode = "list";
+  state.session.layouts.showTextWall(formatBringList(items));
+
+  return c.json({ ok: true, count: items.length });
 });
 
 /**
