@@ -86,7 +86,11 @@ async function fetchBringItems(): Promise<{ name: string; specification: string 
   }
 }
 
-const COL_WIDTH = 14;
+// G1 display: 576 px wide, ~11 px/char average → 52 chars per line, 5 lines max
+// Two equal columns: 25 chars each + 2-char gap = 52
+const DISPLAY_COLS = 52;
+const COL_GAP = 2;
+const COL_WIDTH = Math.floor((DISPLAY_COLS - COL_GAP) / 2); // 25
 
 function itemLabel(item: { name: string; specification: string }): string {
   const s = item.specification ? `${item.name} (${item.specification})` : item.name;
@@ -99,12 +103,13 @@ function formatBringList(items: { name: string; specification: string }[]): stri
   const visible = items.slice(0, 10);
   const col1 = visible.slice(0, 5);
   const col2 = visible.slice(5, 10);
+  const gap = " ".repeat(COL_GAP);
 
   return col1
     .map((item, i) => {
       const left = itemLabel(item).padEnd(COL_WIDTH);
       const right = col2[i] ? itemLabel(col2[i]) : "";
-      return right ? `${left}  ${right}` : left.trimEnd();
+      return right ? `${left}${gap}${right}` : left.trimEnd();
     })
     .join("\n");
 }
