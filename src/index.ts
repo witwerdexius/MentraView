@@ -250,6 +250,8 @@ mentraApp.get("/status", (c) => {
   });
 });
 
-mentraApp.start().then(() => {
-  console.log(`[MentraOS] Reader App läuft auf Port ${PORT}`);
-});
+// start() initialises the SDK connection but does not bind the HTTP server —
+// Bun.serve() must be called explicitly to keep the process alive.
+await mentraApp.start();
+Bun.serve({ port: PORT, fetch: mentraApp.fetch.bind(mentraApp) });
+console.log(`[MentraOS] Reader App läuft auf Port ${PORT}`);
