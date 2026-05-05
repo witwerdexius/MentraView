@@ -137,19 +137,25 @@ class ReaderApp extends AppServer {
     );
 
     // ── TouchBar-Steuerung ──────────────────────────────────────────
-    // Einmal tippen  → nächste Seite
-    // Lang drücken   → vorherige Seite
+    // Vorwärts : single_tap  oder forward_swipe
+    // Rückwärts: long_press  oder backward_swipe
     session.events.onTouchEvent((data) => {
+      // Jede Geste loggen – sichtbar in Render-Logs und beim Debuggen
+      console.log(`[Touch] userId=${userId} gesture=${data.gesture_name} model=${data.device_model ?? "?"}`);
+
       const state = activeSessions.get(userId);
       if (!state || state.pages.length === 0) {
+        // Kein Artikel geladen → Gesture auf dem HUD anzeigen (Debug-Hilfe)
         session.layouts.showTextWall(
-          "Noch kein Artikel geladen.\nÖffne die Web-UI am Handy."
+          `TouchBar erkannt: ${data.gesture_name}\n\nLade zuerst einen Artikel über die Web-UI.`
         );
         return;
       }
 
-      if (data.gesture_name === "single_tap") {
-        // Nächste Seite
+      const isForward  = data.gesture_name === "single_tap"  || data.gesture_name === "forward_swipe";
+      const isBackward = data.gesture_name === "long_press"   || data.gesture_name === "backward_swipe";
+
+      if (isForward) {
         if (state.currentPage < state.pages.length - 1) {
           state.currentPage++;
           showCurrentPage(state);
@@ -158,8 +164,7 @@ class ReaderApp extends AppServer {
             "— Ende des Artikels —\n\nLang drücken = zurück scrollen"
           );
         }
-      } else if (data.gesture_name === "long_press") {
-        // Vorherige Seite
+      } else if (isBackward) {
         if (state.currentPage > 0) {
           state.currentPage--;
           showCurrentPage(state);
