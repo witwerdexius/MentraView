@@ -1,7 +1,6 @@
 import { AppServer, AppSession } from "@mentra/sdk";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
-import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -180,23 +179,33 @@ class ReaderApp extends AppServer {
   }
 }
 
-// ─── Web UI (Express) ─────────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────────────────
 
-const webApp = express();
-webApp.use(express.json());
-webApp.use(express.static(path.join(__dirname, "..", "public")));
+// AppServer extends Hono — beide auf einem einzigen PORT
+const mentraApp = new ReaderApp({
+  packageName: PACKAGE_NAME,
+  apiKey: API_KEY,
+  port: PORT,
+  publicDir: path.join(__dirname, "..", "public"),
+});
 
 /**
  * POST /load
  * Body: { userId: string, url: string }
  * Lädt eine URL und schickt den Text an die Brille des Nutzers.
  */
-webApp.post("/load", async (req, res) => {
-  const { userId, url } = req.body as { userId?: string; url?: string };
+mentraApp.post("/load", async (c) => {
+  let body: { userId?: string; url?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "userId und url sind erforderlich." }, 400);
+  }
+
+  const { userId, url } = body;
 
   if (!userId || !url) {
-    res.status(400).json({ error: "userId und url sind erforderlich." });
-    return;
+    return c.json({ error: "userId und url sind erforderlich." }, 400);
   }
 
   // Einfache URL-Validierung
@@ -207,21 +216,20 @@ webApp.post("/load", async (req, res) => {
       throw new Error("Nur http:// und https:// URLs erlaubt.");
     }
   } catch {
-    res.status(400).json({ error: "Ungültige URL." });
-    return;
+    return c.json({ error: "Ungültige URL." }, 400);
   }
 
   try {
     await loadUrl(userId, parsedUrl.href);
     const state = activeSessions.get(userId);
-    res.json({
+    return c.json({
       success: true,
       title: state?.title ?? "",
       pages: state?.pages.length ?? 0,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
-    res.status(500).json({ error: msg });
+    return c.json({ error: msg }, 500);
   }
 });
 
@@ -229,35 +237,17 @@ webApp.post("/load", async (req, res) => {
  * GET /status
  * Gibt an, ob ein Nutzer gerade eine aktive Brille verbunden hat.
  */
-webApp.get("/status", (req, res) => {
-  const userId = req.query.userId as string | undefined;
+mentraApp.get("/status", (c) => {
+  const userId = c.req.query("userId");
   if (!userId) {
-    res.json({ connected: false });
-    return;
+    return c.json({ connected: false });
   }
-  res.json({
+  return c.json({
     connected: activeSessions.has(userId),
     pages: activeSessions.get(userId)?.pages.length ?? 0,
     currentPage: (activeSessions.get(userId)?.currentPage ?? 0) + 1,
     title: activeSessions.get(userId)?.title ?? "",
   });
-});
-
-// ─── Start ────────────────────────────────────────────────────────────────────
-
-// MentraOS AppServer starten
-const mentraApp = new ReaderApp({
-  packageName: PACKAGE_NAME,
-  apiKey: API_KEY,
-  port: PORT,
-});
-
-// Express Web UI auf PORT+1 starten
-// (Auf Render: Haupt-Port = PORT für MentraOS, PORT+1 für Web UI
-//  → In der Render-Console beide Ports freigeben, oder Port anpassen)
-const WEB_PORT = PORT + 1;
-webApp.listen(WEB_PORT, () => {
-  console.log(`[Web UI] läuft auf http://localhost:${WEB_PORT}`);
 });
 
 mentraApp.start().then(() => {
