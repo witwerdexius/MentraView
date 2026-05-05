@@ -133,48 +133,12 @@ class ReaderApp extends AppServer {
 
     // Willkommenstext
     session.layouts.showTextWall(
-      "📖 Web Reader\n\nÖffne die App-URL am Handy,\ngib eine Website-Adresse ein\nund die Brille zeigt den Text."
+      "📖 Web Reader\n\nÖffne die App-URL am Handy,\ngib eine Website-Adresse ein\nund die Brille zeigt den Text.\n\nTippen/wischen = Seite blättern"
     );
 
-    // ── TouchBar-Steuerung ──────────────────────────────────────────
-    // Vorwärts : single_tap  oder forward_swipe
-    // Rückwärts: long_press  oder backward_swipe
-    session.events.onTouchEvent((data) => {
-      // Jede Geste loggen – sichtbar in Render-Logs und beim Debuggen
-      console.log(`[Touch] userId=${userId} gesture=${data.gesture_name} model=${data.device_model ?? "?"}`);
-
-      const state = activeSessions.get(userId);
-      if (!state || state.pages.length === 0) {
-        // Kein Artikel geladen → Gesture auf dem HUD anzeigen (Debug-Hilfe)
-        session.layouts.showTextWall(
-          `TouchBar erkannt: ${data.gesture_name}\n\nLade zuerst einen Artikel über die Web-UI.`
-        );
-        return;
-      }
-
-      const isForward  = data.gesture_name === "single_tap"  || data.gesture_name === "forward_swipe";
-      const isBackward = data.gesture_name === "long_press"   || data.gesture_name === "backward_swipe";
-
-      if (isForward) {
-        if (state.currentPage < state.pages.length - 1) {
-          state.currentPage++;
-          showCurrentPage(state);
-        } else {
-          session.layouts.showTextWall(
-            "— Ende des Artikels —\n\nLang drücken = zurück scrollen"
-          );
-        }
-      } else if (isBackward) {
-        if (state.currentPage > 0) {
-          state.currentPage--;
-          showCurrentPage(state);
-        } else {
-          session.layouts.showTextWall(
-            "— Erste Seite —\n\nEinmal tippen = vorwärts scrollen"
-          );
-        }
-      }
-    });
+    // TouchBar-Navigation läuft über bridge.onEvenHubEvent im WebView
+    // (Even Realities Hub-API, die auf der Brille selbst ausgeführt wird)
+    // → POST /navigate vom WebView → showCurrentPage() hier
 
     // Session aufräumen wenn Brille trennt
     session.events.onSessionEnd?.(() => {
@@ -236,6 +200,49 @@ mentraApp.post("/load", async (c) => {
     const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
     return c.json({ error: msg }, 500);
   }
+});
+
+/**
+ * POST /navigate
+ * Body: { userId: string, direction: "next" | "prev" }
+ * Wird vom Even-Realities-WebView auf der Brille aufgerufen (bridge.onEvenHubEvent).
+ */
+mentraApp.post("/navigate", async (c) => {
+  let body: { userId?: string; direction?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Ungültiger Body" }, 400);
+  }
+
+  const { userId, direction } = body;
+  if (!userId) return c.json({ error: "userId fehlt" }, 400);
+
+  const state = activeSessions.get(userId);
+  if (!state) return c.json({ error: "Keine aktive Session" }, 404);
+  if (state.pages.length === 0) return c.json({ error: "Kein Artikel geladen" }, 400);
+
+  if (direction === "next") {
+    if (state.currentPage < state.pages.length - 1) {
+      state.currentPage++;
+      showCurrentPage(state);
+    } else {
+      state.session.layouts.showTextWall(
+        "— Ende des Artikels —\n\nNach oben wischen = zurück"
+      );
+    }
+  } else if (direction === "prev") {
+    if (state.currentPage > 0) {
+      state.currentPage--;
+      showCurrentPage(state);
+    } else {
+      state.session.layouts.showTextWall(
+        "— Erste Seite —\n\nTippen oder nach unten wischen = vorwärts"
+      );
+    }
+  }
+
+  return c.json({ ok: true, page: state.currentPage + 1, total: state.pages.length });
 });
 
 /**

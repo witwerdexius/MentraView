@@ -340,6 +340,46 @@
     urlInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") loadBtn.click();
     });
+
+    // ── Even Realities Hub Bridge (läuft auf G1/G2-Brille) ──────────
+    // Wenn der WebView auf der Brille ausgeführt wird, stellt Even Realities
+    // das globale `bridge`-Objekt bereit. Tipp- und Wischgesten werden hier
+    // abgefangen und via POST /navigate an den Server weitergeleitet.
+    //
+    // OsEventTypeList:
+    //   0 = CLICK_EVENT (Tippen)        → nächste Seite
+    //   1 = SCROLL_TOP_EVENT (oben)     → vorherige Seite
+    //   2 = SCROLL_BOTTOM_EVENT (unten) → nächste Seite
+    //   3 = DOUBLE_CLICK_EVENT          → nächste Seite
+    if (typeof bridge !== "undefined" && typeof bridge.onEvenHubEvent === "function") {
+      bridge.onEvenHubEvent(async (event) => {
+        const eventType =
+          event?.textEvent?.eventType ??
+          event?.listEvent?.eventType ??
+          event?.eventType;
+
+        console.log("[Bridge] eventType:", eventType, "userId:", userId);
+
+        if (!userId || eventType == null) return;
+
+        const direction =
+          eventType === 1 ? "prev"   // SCROLL_TOP_EVENT → zurück
+          : [0, 2, 3].includes(eventType) ? "next"  // Tippen / Wischen runter → vor
+          : null;
+
+        if (!direction) return;
+
+        try {
+          await fetch("/navigate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId, direction }),
+          });
+        } catch (e) {
+          console.error("[Bridge] /navigate Fehler:", e);
+        }
+      });
+    }
   </script>
 </body>
 </html>
