@@ -109,7 +109,7 @@ function formatBringList(items: { name: string; specification: string }[]): stri
     .map((item, i) => {
       const left = itemLabel(item).padEnd(COL_WIDTH);
       const right = col2[i] ? itemLabel(col2[i]) : "";
-      return right ? `${left}${gap}${right}` : left.trimEnd();
+      return right ? `${left}${gap}${right.padStart(COL_WIDTH)}` : left.trimEnd();
     })
     .join("\n");
 }
