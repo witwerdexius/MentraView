@@ -137,9 +137,9 @@ class ReaderApp extends AppServer {
     );
 
     // ── TouchBar-Steuerung ──────────────────────────────────────────
-    // Kurz tippen  → nächste Seite
-    // Lang drücken → vorherige Seite
-    session.events.onButtonPress((data) => {
+    // Einmal tippen  → nächste Seite
+    // Lang drücken   → vorherige Seite
+    session.events.onTouchEvent((data) => {
       const state = activeSessions.get(userId);
       if (!state || state.pages.length === 0) {
         session.layouts.showTextWall(
@@ -148,7 +148,7 @@ class ReaderApp extends AppServer {
         return;
       }
 
-      if (data.pressType === "short") {
+      if (data.gesture_name === "single_tap") {
         // Nächste Seite
         if (state.currentPage < state.pages.length - 1) {
           state.currentPage++;
@@ -158,14 +158,14 @@ class ReaderApp extends AppServer {
             "— Ende des Artikels —\n\nLang drücken = zurück scrollen"
           );
         }
-      } else if (data.pressType === "long") {
+      } else if (data.gesture_name === "long_press") {
         // Vorherige Seite
         if (state.currentPage > 0) {
           state.currentPage--;
           showCurrentPage(state);
         } else {
           session.layouts.showTextWall(
-            "— Erste Seite —\n\nKurz tippen = vorwärts scrollen"
+            "— Erste Seite —\n\nEinmal tippen = vorwärts scrollen"
           );
         }
       }
@@ -231,6 +231,14 @@ mentraApp.post("/load", async (c) => {
     const msg = err instanceof Error ? err.message : "Unbekannter Fehler";
     return c.json({ error: msg }, 500);
   }
+});
+
+/**
+ * GET /sessions
+ * Gibt alle aktuell verbundenen userIds zurück.
+ */
+mentraApp.get("/sessions", (c) => {
+  return c.json({ sessions: Array.from(activeSessions.keys()) });
 });
 
 /**

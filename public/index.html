@@ -125,12 +125,59 @@
     }
 
     .dot.connected { background: #4ade80; box-shadow: 0 0 6px #4ade8088; }
+
+    .user-id-section {
+      margin-bottom: 20px;
+    }
+
+    .user-id-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .user-id-row input {
+      flex: 1;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #f0f0f0;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+      min-width: 0;
+    }
+
+    .user-id-row input:focus { border-color: #555; }
+
+    .refresh-btn {
+      margin-top: 0;
+      width: auto;
+      padding: 0 14px;
+      background: #2a2a2a;
+      color: #888;
+      font-size: 1rem;
+      border-radius: 10px;
+      border: 1px solid #333;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .refresh-btn:hover { color: #f0f0f0; border-color: #555; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>📖 Web Reader</h1>
     <p class="subtitle">Artikel auf der G1 lesen</p>
+
+    <div id="userIdSection" class="user-id-section">
+      <label for="userIdInput">User ID</label>
+      <div class="user-id-row">
+        <input type="text" id="userIdInput" placeholder="Wird geladen…" autocomplete="off" />
+        <button class="refresh-btn" id="refreshBtn" title="Sessions neu laden">↻</button>
+      </div>
+    </div>
 
     <div class="glass-status">
       <div class="dot" id="dot"></div>
@@ -157,33 +204,87 @@
   </div>
 
   <script>
-    // userId kommt als URL-Parameter von MentraOS: ?userId=abc123
-    const params = new URLSearchParams(location.search);
-    const userId = params.get("userId") || "";
+    const urlParams = new URLSearchParams(location.search);
 
-    const urlInput = document.getElementById("urlInput");
-    const loadBtn  = document.getElementById("loadBtn");
-    const statusBox = document.getElementById("statusBox");
-    const dot       = document.getElementById("dot");
-    const glassLabel = document.getElementById("glassLabel");
+    const userIdSection = document.getElementById("userIdSection");
+    const userIdInput   = document.getElementById("userIdInput");
+    const refreshBtn    = document.getElementById("refreshBtn");
+    const urlInput      = document.getElementById("urlInput");
+    const loadBtn       = document.getElementById("loadBtn");
+    const statusBox     = document.getElementById("statusBox");
+    const dot           = document.getElementById("dot");
+    const glassLabel    = document.getElementById("glassLabel");
+
+    // userId aus URL-Parameter (gesetzt von MentraOS) oder manuell
+    let userId = urlParams.get("userId") || "";
+
+    if (userId) {
+      // Direkt von MentraOS geliefert — Eingabefeld ausblenden
+      userIdSection.style.display = "none";
+    } else {
+      // Kein URL-Parameter → aktive Sessions vom Server laden
+      loadSessions();
+    }
 
     function setStatus(text, type) {
       statusBox.textContent = text;
       statusBox.className = `status ${type} show`;
     }
 
-    function clearStatus() {
-      statusBox.className = "status";
+    // ── Sessions vom Server laden ─────────────────────────────────────
+    async function loadSessions() {
+      userIdInput.placeholder = "Wird geladen…";
+      try {
+        const res  = await fetch("/sessions");
+        const data = await res.json();
+        const ids  = data.sessions || [];
+
+        if (ids.length === 1) {
+          // Genau eine Session → automatisch auswählen
+          userId = ids[0];
+          userIdInput.value = userId;
+          checkGlassStatus();
+        } else if (ids.length > 1) {
+          // Mehrere Sessions → Datalist-Dropdown anbieten
+          userIdInput.placeholder = "Session auswählen oder eingeben";
+          let list = document.getElementById("sessionsList");
+          if (!list) {
+            list = document.createElement("datalist");
+            list.id = "sessionsList";
+            document.body.appendChild(list);
+            userIdInput.setAttribute("list", "sessionsList");
+          }
+          list.innerHTML = "";
+          ids.forEach(id => {
+            const opt = document.createElement("option");
+            opt.value = id;
+            list.appendChild(opt);
+          });
+        } else {
+          userIdInput.placeholder = "Keine aktive Session — ID manuell eingeben";
+        }
+      } catch {
+        userIdInput.placeholder = "Server nicht erreichbar";
+      }
     }
+
+    refreshBtn.addEventListener("click", loadSessions);
+
+    userIdInput.addEventListener("change", () => {
+      userId = userIdInput.value.trim();
+      checkGlassStatus();
+    });
 
     // ── Brille-Verbindungsstatus pollen ──────────────────────────────
     async function checkGlassStatus() {
       if (!userId) {
-        glassLabel.textContent = "Kein Nutzer erkannt (userId fehlt in URL)";
+        glassLabel.textContent = "Bitte User ID eingeben oder ↻ drücken";
+        dot.classList.remove("connected");
+        loadBtn.disabled = true;
         return;
       }
       try {
-        const res = await fetch(`/status?userId=${encodeURIComponent(userId)}`);
+        const res  = await fetch(`/status?userId=${encodeURIComponent(userId)}`);
         const data = await res.json();
         if (data.connected) {
           dot.classList.add("connected");
@@ -214,12 +315,11 @@
       setStatus("⏳ Artikel wird geladen…", "loading");
 
       try {
-        const res = await fetch("/load", {
+        const res  = await fetch("/load", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId, url }),
         });
-
         const data = await res.json();
 
         if (res.ok) {
@@ -230,14 +330,13 @@
         } else {
           setStatus(`❌ ${data.error}`, "error");
         }
-      } catch (err) {
+      } catch {
         setStatus("❌ Verbindung zum Server fehlgeschlagen.", "error");
       } finally {
         loadBtn.disabled = false;
       }
     });
 
-    // Enter-Taste im URL-Feld
     urlInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") loadBtn.click();
     });
