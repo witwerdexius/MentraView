@@ -86,29 +86,9 @@ async function fetchBringItems(): Promise<{ name: string; specification: string 
   }
 }
 
-// G1 uses a proportional font — padding with spaces doesn't align columns visually.
-// Instead: fixed " | " separator in the middle, each side truncated to 22 chars.
-const COL_WIDTH = 22;
-
-function itemLabel(item: { name: string; specification: string }): string {
-  const s = item.specification ? `${item.name} (${item.specification})` : item.name;
-  return s.length > COL_WIDTH ? s.slice(0, COL_WIDTH - 1) + "…" : s;
-}
-
 function formatBringList(items: { name: string; specification: string }[]): string {
   if (items.length === 0) return "✓ Alles erledigt!";
-
-  const visible = items.slice(0, 10);
-  const col1 = visible.slice(0, 5);
-  const col2 = visible.slice(5, 10);
-
-  return col1
-    .map((item, i) => {
-      const left = itemLabel(item);
-      const right = col2[i] ? itemLabel(col2[i]) : "";
-      return right ? `${left} | ${right}` : left;
-    })
-    .join("\n");
+  return items.map((i) => i.name).join(" | ");
 }
 
 // ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
