@@ -9,6 +9,7 @@
   "dependencies": {
     "@mentra/sdk": "latest",
     "@mozilla/readability": "^0.5.0",
+    "bring-shopping": "^2.0.1",
     "jsdom": "^25.0.0"
   },
   "devDependencies": {

@@ -1,6 +1,7 @@
 import { AppServer, AppSession } from "@mentra/sdk";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
+import Bring from "bring-shopping";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -10,8 +11,13 @@ const PORT = parseInt(process.env.PORT || "3000");
 const PACKAGE_NAME = process.env.PACKAGE_NAME || "com.beispiel.reader";
 const API_KEY = process.env.MENTRA_API_KEY || "";
 
+const BRING_EMAIL = process.env.BRING_EMAIL ?? "";
+const BRING_PASSWORD = process.env.BRING_PASSWORD ?? "";
+
 /** Maximale Zeichen pro Seite auf dem G1-HUD */
 const CHARS_PER_PAGE = 260;
+/** Polling-Intervall für die Einkaufsliste in ms */
+const BRING_POLL_MS = 5_000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,17 +29,87 @@ interface SessionState {
   currentPage: number;
   session: AppSession;
   title: string;
+  /** "list" = Einkaufsliste aktiv, "article" = Artikel geladen */
+  displayMode: "list" | "article";
+  pollTimer: ReturnType<typeof setInterval> | null;
+  /** Serialisierter Snapshot der letzten Liste — für Änderungserkennung */
+  lastListSnapshot: string;
 }
 
 // Aktive Sessions: userId → State
 const activeSessions = new Map<string, SessionState>();
 
+// ─── Bring! Client ────────────────────────────────────────────────────────────
+
+let bringClient: InstanceType<typeof Bring> | null = null;
+let bringListUuid: string | null = null;
+
+async function initBring(): Promise<void> {
+  if (!BRING_EMAIL || !BRING_PASSWORD) {
+    console.warn("[Bring] BRING_EMAIL oder BRING_PASSWORD nicht gesetzt — Liste deaktiviert.");
+    return;
+  }
+  try {
+    const client = new Bring({ mail: BRING_EMAIL, password: BRING_PASSWORD });
+    await client.login();
+    const { lists } = await client.loadLists();
+    const zuhause = lists.find((l) => l.name === "Zuhause");
+    if (!zuhause) {
+      console.warn(
+        `[Bring] 'Zuhause'-Liste nicht gefunden. Verfügbare Listen: ${lists.map((l) => l.name).join(", ")}`
+      );
+      return;
+    }
+    bringClient = client;
+    bringListUuid = zuhause.listUuid;
+    console.log(`[Bring] Login OK. Zuhause-Liste: ${bringListUuid}`);
+  } catch (err) {
+    console.error("[Bring] Login fehlgeschlagen:", err);
+  }
+}
+
+async function fetchBringItems(): Promise<{ name: string; specification: string }[]> {
+  if (!bringClient || !bringListUuid) return [];
+  try {
+    const response = await bringClient.getItems(bringListUuid);
+    return response.purchase;
+  } catch {
+    // Token abgelaufen → erneut einloggen und nochmal versuchen
+    try {
+      await bringClient.login();
+      const response = await bringClient.getItems(bringListUuid!);
+      return response.purchase;
+    } catch (err) {
+      console.error("[Bring] Listenabfrage fehlgeschlagen:", err);
+      return [];
+    }
+  }
+}
+
+function formatBringList(items: { name: string; specification: string }[]): string {
+  if (items.length === 0) {
+    return "🛒 Einkaufsliste\n\n✓ Alles erledigt!";
+  }
+  const header = `🛒 Einkaufsliste (${items.length})\n\n`;
+  let display = header;
+  let shown = 0;
+
+  for (const item of items) {
+    const spec = item.specification ? ` (${item.specification})` : "";
+    const line = `• ${item.name}${spec}\n`;
+    if ((display + line).length > CHARS_PER_PAGE - 20) {
+      display += `…+${items.length - shown} weitere`;
+      break;
+    }
+    display += line;
+    shown++;
+  }
+
+  return display.trim();
+}
+
 // ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
-/**
- * Teilt einen langen Text in Seiten mit maximal `maxChars` Zeichen auf.
- * Bricht nur an Wortgrenzen um.
- */
 function paginateText(text: string, maxChars: number): string[] {
   const cleaned = text.replace(/\s+/g, " ").trim();
   const words = cleaned.split(" ");
@@ -54,9 +130,6 @@ function paginateText(text: string, maxChars: number): string[] {
   return pages;
 }
 
-/**
- * Zeigt die aktuelle Seite auf der Brille an.
- */
 function showCurrentPage(state: SessionState): void {
   const { pages, currentPage, session, title } = state;
   const header = `[${currentPage + 1}/${pages.length}] ${title}`;
@@ -64,17 +137,12 @@ function showCurrentPage(state: SessionState): void {
   session.layouts.showTextWall(`${header}\n\n${content}`);
 }
 
-/**
- * Lädt eine URL, extrahiert den Lesbarkeits-Text (Firefox Reader Mode)
- * und speichert die paginierten Seiten in der Session.
- */
 async function loadUrl(userId: string, url: string): Promise<void> {
   const state = activeSessions.get(userId);
   if (!state) throw new Error("Keine aktive G1-Session gefunden.");
 
   state.session.layouts.showTextWall(`⏳ Lade Artikel…\n\n${url}`);
 
-  // URL fetchen
   let html: string;
   try {
     const response = await fetch(url, {
@@ -92,7 +160,6 @@ async function loadUrl(userId: string, url: string): Promise<void> {
     throw err;
   }
 
-  // Readability (Firefox Reader Mode)
   const dom = new JSDOM(html, { url });
   const reader = new Readability(dom.window.document);
   const article = reader.parse();
@@ -104,11 +171,11 @@ async function loadUrl(userId: string, url: string): Promise<void> {
     throw new Error("Kein lesbarer Inhalt");
   }
 
-  // Paginieren
   const pages = paginateText(article.textContent, CHARS_PER_PAGE);
   state.pages = pages;
   state.currentPage = 0;
   state.title = article.title?.slice(0, 30) || "Artikel";
+  state.displayMode = "article";
 
   showCurrentPage(state);
 }
@@ -123,26 +190,45 @@ class ReaderApp extends AppServer {
   ): Promise<void> {
     console.log(`[Session] Neue Verbindung: userId=${userId}`);
 
-    // State initialisieren
-    activeSessions.set(userId, {
+    const state: SessionState = {
       pages: [],
       currentPage: 0,
       session,
       title: "",
-    });
+      displayMode: "list",
+      pollTimer: null,
+      lastListSnapshot: "",
+    };
+    activeSessions.set(userId, state);
 
-    // Willkommenstext
-    session.layouts.showTextWall(
-      "📖 Web Reader\n\nÖffne die App-URL am Handy,\ngib eine Website-Adresse ein\nund die Brille zeigt den Text.\n\nTippen/wischen = Seite blättern"
-    );
+    if (bringClient && bringListUuid) {
+      // Erste Anzeige sofort
+      const items = await fetchBringItems();
+      state.lastListSnapshot = JSON.stringify(items);
+      session.layouts.showTextWall(formatBringList(items));
 
-    // TouchBar-Navigation läuft über bridge.onEvenHubEvent im WebView
-    // (Even Realities Hub-API, die auf der Brille selbst ausgeführt wird)
-    // → POST /navigate vom WebView → showCurrentPage() hier
+      // Polling alle 5 Sekunden
+      state.pollTimer = setInterval(async () => {
+        const currentState = activeSessions.get(userId);
+        if (!currentState || currentState.displayMode !== "list") return;
 
-    // Session aufräumen wenn Brille trennt
+        const newItems = await fetchBringItems();
+        const newSnapshot = JSON.stringify(newItems);
+        if (newSnapshot !== currentState.lastListSnapshot) {
+          currentState.lastListSnapshot = newSnapshot;
+          currentState.session.layouts.showTextWall(formatBringList(newItems));
+        }
+      }, BRING_POLL_MS);
+    } else {
+      session.layouts.showTextWall(
+        "📖 Web Reader\n\nÖffne die App-URL am Handy,\ngib eine Website-Adresse ein\nund die Brille zeigt den Text.\n\nTippen/wischen = Seite blättern"
+      );
+    }
+
     session.events.onSessionEnd?.(() => {
       console.log(`[Session] Beendet: userId=${userId}`);
+      const s = activeSessions.get(userId);
+      if (s?.pollTimer) clearInterval(s.pollTimer);
       activeSessions.delete(userId);
     });
   }
@@ -150,7 +236,6 @@ class ReaderApp extends AppServer {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-// AppServer extends Hono — beide auf einem einzigen PORT
 const mentraApp = new ReaderApp({
   packageName: PACKAGE_NAME,
   apiKey: API_KEY,
@@ -161,7 +246,6 @@ const mentraApp = new ReaderApp({
 /**
  * POST /load
  * Body: { userId: string, url: string }
- * Lädt eine URL und schickt den Text an die Brille des Nutzers.
  */
 mentraApp.post("/load", async (c) => {
   let body: { userId?: string; url?: string };
@@ -177,7 +261,6 @@ mentraApp.post("/load", async (c) => {
     return c.json({ error: "userId und url sind erforderlich." }, 400);
   }
 
-  // Einfache URL-Validierung
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(url);
@@ -205,7 +288,6 @@ mentraApp.post("/load", async (c) => {
 /**
  * POST /navigate
  * Body: { userId: string, direction: "next" | "prev" }
- * Wird vom Even-Realities-WebView auf der Brille aufgerufen (bridge.onEvenHubEvent).
  */
 mentraApp.post("/navigate", async (c) => {
   let body: { userId?: string; direction?: string };
@@ -247,7 +329,6 @@ mentraApp.post("/navigate", async (c) => {
 
 /**
  * GET /sessions
- * Gibt alle aktuell verbundenen userIds zurück.
  */
 mentraApp.get("/sessions", (c) => {
   return c.json({ sessions: Array.from(activeSessions.keys()) });
@@ -255,7 +336,6 @@ mentraApp.get("/sessions", (c) => {
 
 /**
  * GET /status
- * Gibt an, ob ein Nutzer gerade eine aktive Brille verbunden hat.
  */
 mentraApp.get("/status", (c) => {
   const userId = c.req.query("userId");
@@ -270,8 +350,7 @@ mentraApp.get("/status", (c) => {
   });
 });
 
-// start() initialises the SDK connection but does not bind the HTTP server —
-// Bun.serve() must be called explicitly to keep the process alive.
+await initBring();
 await mentraApp.start();
 Bun.serve({ port: PORT, fetch: mentraApp.fetch.bind(mentraApp) });
-console.log(`[MentraOS] Reader App läuft auf Port ${PORT}`);
+console.log(`[MentraOS] App läuft auf Port ${PORT}`);
